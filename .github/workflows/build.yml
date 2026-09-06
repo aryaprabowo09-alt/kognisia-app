@@ -1,0 +1,429 @@
+name: Build Kognisia APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Generate Clean Android Project (0 Ads)
+        run: |
+          mkdir -p android_app/app/src/main/java/id/my/kognisia/app
+          mkdir -p android_app/app/src/main/res/layout
+          mkdir -p android_app/app/src/main/res/values
+          mkdir -p android_app/app/src/main/res/drawable
+          mkdir -p android_app/app/src/main/res/xml
+          mkdir -p android_app/app/src/main/res/mipmap-xxhdpi
+
+          # Download official logo from kognisia
+          curl -s -o android_app/app/src/main/res/drawable/logo.jpg https://kognisia.my.id/assets/images/logo.jpg || true
+          cp android_app/app/src/main/res/drawable/logo.jpg android_app/app/src/main/res/mipmap-xxhdpi/ic_launcher.png || true
+
+          # 1. settings.gradle
+          cat << 'EOF' > android_app/settings.gradle
+          rootProject.name = "Kognisia"
+          include ':app'
+          EOF
+
+          # 2. root build.gradle
+          cat << 'EOF' > android_app/build.gradle
+          buildscript {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:8.2.2'
+              }
+          }
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          EOF
+
+          # 3. app/build.gradle
+          cat << 'EOF' > android_app/app/build.gradle
+          apply plugin: 'com.android.application'
+
+          android {
+              namespace 'id.my.kognisia.app'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "id.my.kognisia.app"
+                  minSdk 21
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0.0"
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                  }
+                  debug {
+                      debuggable false
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+
+          dependencies {
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'com.google.android.material:material:1.11.0'
+              implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
+          }
+          EOF
+
+          # 4. AndroidManifest.xml
+          cat << 'EOF' > android_app/app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+              <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+
+              <application
+                  android:allowBackup="true"
+                  android:icon="@drawable/logo"
+                  android:label="Kognisia"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.Kognisia"
+                  android:usesCleartextTraffic="true">
+                  <activity
+                      android:name=".MainActivity"
+                      android:configChanges="orientation|screenSize|keyboardHidden"
+                      android:exported="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          # 5. res/values/
+          cat << 'EOF' > android_app/app/src/main/res/values/strings.xml
+          <resources>
+              <string name="app_name">Kognisia</string>
+              <string name="no_internet">Tidak ada koneksi internet</string>
+              <string name="check_conn">Periksa jaringan internet Anda, lalu coba lagi.</string>
+              <string name="retry">Coba Lagi</string>
+          </resources>
+          EOF
+
+          cat << 'EOF' > android_app/app/src/main/res/values/colors.xml
+          <resources>
+              <color name="primary">#0284C7</color>
+              <color name="primary_dark">#0369A1</color>
+              <color name="white">#FFFFFFFF</color>
+              <color name="background">#F8FAFC</color>
+              <color name="text_dark">#0F172A</color>
+          </resources>
+          EOF
+
+          cat << 'EOF' > android_app/app/src/main/res/values/themes.xml
+          <resources>
+              <style name="Theme.Kognisia" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+                  <item name="colorPrimary">@color/primary</item>
+                  <item name="colorPrimaryVariant">@color/primary_dark</item>
+                  <item name="android:statusBarColor">@color/primary_dark</item>
+              </style>
+          </resources>
+          EOF
+
+          # 6. res/layout/activity_main.xml
+          cat << 'EOF' > android_app/app/src/main/res/layout/activity_main.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent">
+
+              <ProgressBar
+                  android:id="@+id/progressBar"
+                  style="@style/Widget.AppCompat.ProgressBar.Horizontal"
+                  android:layout_width="match_parent"
+                  android:layout_height="3dp"
+                  android:layout_alignParentTop="true"
+                  android:visibility="gone" />
+
+              <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+                  android:id="@+id/swipeRefresh"
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent"
+                  android:layout_below="@id/progressBar">
+                  <WebView
+                      android:id="@+id/webView"
+                      android:layout_width="match_parent"
+                      android:layout_height="match_parent" />
+              </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+
+              <LinearLayout
+                  android:id="@+id/layoutError"
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent"
+                  android:gravity="center"
+                  android:orientation="vertical"
+                  android:padding="24dp"
+                  android:visibility="gone">
+                  <TextView
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text="@string/no_internet"
+                      android:textColor="@color/text_dark"
+                      android:textSize="20sp"
+                      android:textStyle="bold" />
+                  <TextView
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:layout_marginTop="8dp"
+                      android:text="@string/check_conn"
+                      android:textColor="#64748B" />
+                  <Button
+                      android:id="@+id/btnRetry"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:layout_marginTop="16dp"
+                      android:backgroundTint="@color/primary"
+                      android:text="@string/retry" />
+              </LinearLayout>
+          </RelativeLayout>
+          EOF
+
+          # 7. MainActivity.java
+          cat << 'EOF' > android_app/app/src/main/java/id/my/kognisia/app/MainActivity.java
+          package id.my.kognisia.app;
+
+          import android.annotation.SuppressLint;
+          import android.app.DownloadManager;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.graphics.Bitmap;
+          import android.net.ConnectivityManager;
+          import android.net.NetworkInfo;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.os.Environment;
+          import android.view.View;
+          import android.webkit.CookieManager;
+          import android.webkit.URLUtil;
+          import android.webkit.ValueCallback;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceError;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.ProgressBar;
+          import android.widget.Toast;
+          import androidx.activity.OnBackPressedCallback;
+          import androidx.annotation.Nullable;
+          import androidx.appcompat.app.AppCompatActivity;
+          import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
+
+          public class MainActivity extends AppCompatActivity {
+              private static final String TARGET_URL = "https://kognisia.my.id/";
+              private static final int FILE_CHOOSER_REQUEST_CODE = 1001;
+
+              private WebView webView;
+              private ProgressBar progressBar;
+              private SwipeRefreshLayout swipeRefresh;
+              private LinearLayout layoutError;
+              private Button btnRetry;
+              private ValueCallback<Uri[]> uploadMessage;
+
+              @SuppressLint("SetJavaScriptEnabled")
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  setContentView(R.layout.activity_main);
+
+                  webView = findViewById(R.id.webView);
+                  progressBar = findViewById(R.id.progressBar);
+                  swipeRefresh = findViewById(R.id.swipeRefresh);
+                  layoutError = findViewById(R.id.layoutError);
+                  btnRetry = findViewById(R.id.btnRetry);
+
+                  WebSettings settings = webView.getSettings();
+                  settings.setJavaScriptEnabled(true);
+                  settings.setDomStorageEnabled(true);
+                  settings.setDatabaseEnabled(true);
+                  settings.setAllowFileAccess(true);
+                  settings.setAllowContentAccess(true);
+                  settings.setUseWideViewPort(true);
+                  settings.setLoadWithOverviewMode(true);
+
+                  CookieManager cookieManager = CookieManager.getInstance();
+                  cookieManager.setAcceptCookie(true);
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                      cookieManager.setAcceptThirdPartyCookies(webView, true);
+                  }
+
+                  webView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
+                      try {
+                          DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+                          request.setMimeType(mimetype);
+                          request.addRequestHeader("cookie", CookieManager.getInstance().getCookie(url));
+                          request.setDescription("Mengunduh berkas...");
+                          request.setTitle(URLUtil.guessFileName(url, contentDisposition, mimetype));
+                          request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                          request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, URLUtil.guessFileName(url, contentDisposition, mimetype));
+                          DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                          if (dm != null) dm.enqueue(request);
+                          Toast.makeText(MainActivity.this, "Mengunduh berkas...", Toast.LENGTH_SHORT).show();
+                      } catch (Exception e) {
+                          startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                      }
+                  });
+
+                  webView.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                          String url = request.getUrl().toString();
+                          if (url.startsWith("https://kognisia.my.id/")) return false;
+                          startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                          return true;
+                      }
+                      @Override
+                      public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                          progressBar.setVisibility(View.VISIBLE);
+                      }
+                      @Override
+                      public void onPageFinished(WebView view, String url) {
+                          progressBar.setVisibility(View.GONE);
+                          swipeRefresh.setRefreshing(false);
+                      }
+                      @Override
+                      public void onReceivedError(WebView view, WebResourceRequest req, WebResourceError err) {
+                          if (req.isForMainFrame()) {
+                              webView.setVisibility(View.GONE);
+                              layoutError.setVisibility(View.VISIBLE);
+                          }
+                      }
+                  });
+
+                  webView.setWebChromeClient(new WebChromeClient() {
+                      @Override
+                      public void onProgressChanged(WebView view, int newProgress) {
+                          progressBar.setProgress(newProgress);
+                      }
+                      @Override
+                      public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
+                          uploadMessage = filePathCallback;
+                          try {
+                              startActivityForResult(fileChooserParams.createIntent(), FILE_CHOOSER_REQUEST_CODE);
+                          } catch (Exception e) {
+                              uploadMessage = null;
+                              return false;
+                          }
+                          return true;
+                      }
+                  });
+
+                  swipeRefresh.setOnRefreshListener(() -> {
+                      if (isNetworkAvailable()) webView.reload();
+                      else swipeRefresh.setRefreshing(false);
+                  });
+
+                  btnRetry.setOnClickListener(v -> {
+                      if (isNetworkAvailable()) {
+                          layoutError.setVisibility(View.GONE);
+                          webView.setVisibility(View.VISIBLE);
+                          webView.reload();
+                      }
+                  });
+
+                  getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+                      @Override
+                      public void handleOnBackPressed() {
+                          if (webView.canGoBack()) webView.goBack();
+                          else finish();
+                      }
+                  });
+
+                  if (isNetworkAvailable()) {
+                      webView.loadUrl(TARGET_URL);
+                  } else {
+                      webView.setVisibility(View.GONE);
+                      layoutError.setVisibility(View.VISIBLE);
+                  }
+              }
+
+              private boolean isNetworkAvailable() {
+                  ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+                  if (cm != null) {
+                      NetworkInfo info = cm.getActiveNetworkInfo();
+                      return info != null && info.isConnected();
+                  }
+                  return false;
+              }
+
+              @Override
+              protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+                  super.onActivityResult(requestCode, resultCode, data);
+                  if (requestCode == FILE_CHOOSER_REQUEST_CODE && uploadMessage != null) {
+                      uploadMessage.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data));
+                      uploadMessage = null;
+                  }
+              }
+          }
+          EOF
+
+      - name: Build APK with Gradle
+        run: |
+          cd android_app
+          gradle assembleDebug
+
+      - name: Prepare APK File
+        run: |
+          mv android_app/app/build/outputs/apk/debug/app-debug.apk Kognisia-v1.0.0.apk
+
+      - name: Upload APK as Artifact (Direct Download)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kognisia-APK-Tanpa-Iklan
+          path: Kognisia-v1.0.0.apk
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Kognisia-v1.0.0.apk
+          tag_name: v1.0.0
+          name: "Kognisia v1.0.0 (Official Release)"
+          body: |
+            ### Aplikasi Android Kognisia v1.0.0 (Bebas Iklan)
+            Aplikasi resmi Kognisia untuk Guru dan Madrasah.
+
+            - **URL Web:** https://kognisia.my.id/
+            - **Status:** Bebas Iklan & Tanpa Watermark
+            - **Fitur:** Manajemen RPP, Jadwal Mengajar, Presensi, dan Pengelolaan Nilai Siswa.

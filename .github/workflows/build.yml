@@ -108,16 +108,24 @@ jobs:
           }
           EOF
 
-          # 5. Generate Icon Resmi Kognisia (PNG Mipmaps & Adaptive Icons)
+          # 5. Generate Icon Resmi dari logo.jpg di Root Repositori
           python3 -m pip install --quiet Pillow
-          python3 - << 'PYEOF'
+          cat << 'EOF' > generate_icons.py
           import os
           from PIL import Image, ImageDraw
 
-          logo_path = 'assets/images/logo.jpg'
-          if not os.path.exists(logo_path):
-              logo_path = 'assets/images/favicon.jpg'
+          # Cari logo.jpg di root repositori
+          candidates = ['logo.jpg', 'logo.png', 'assets/images/logo.jpg', 'assets/images/favicon.jpg']
+          logo_path = None
+          for c in candidates:
+              if os.path.exists(c):
+                  logo_path = c
+                  break
 
+          if not logo_path:
+              raise FileNotFoundError("File logo.jpg tidak ditemukan di repositori!")
+
+          print(f"Membuat icon dari file: {logo_path}")
           img = Image.open(logo_path).convert('RGBA')
 
           densities = {
@@ -129,16 +137,17 @@ jobs:
           }
 
           res_path = 'android_app/app/src/main/res'
+          resample_method = getattr(Image, 'Resampling', Image).LANCZOS
 
           for folder, size in densities.items():
               dir_path = os.path.join(res_path, folder)
               os.makedirs(dir_path, exist_ok=True)
 
-              # Standard square launcher icon
-              icon = img.resize((size, size), Image.Resampling.LANCZOS)
+              # 1. Standard square launcher icon (ic_launcher.png)
+              icon = img.resize((size, size), resample_method)
               icon.save(os.path.join(dir_path, 'ic_launcher.png'), 'PNG')
 
-              # Round launcher icon
+              # 2. Round launcher icon (ic_launcher_round.png)
               mask = Image.new('L', (size, size), 0)
               draw = ImageDraw.Draw(mask)
               draw.ellipse((0, 0, size, size), fill=255)
@@ -146,17 +155,18 @@ jobs:
               round_icon.paste(icon, (0, 0), mask=mask)
               round_icon.save(os.path.join(dir_path, 'ic_launcher_round.png'), 'PNG')
 
-              # Foreground for adaptive icon (108dp base)
+              # 3. Foreground for adaptive icon (108dp base)
               fg_size = int(size * 108 / 48)
               fg_img = Image.new('RGBA', (fg_size, fg_size), (0, 0, 0, 0))
               inner_size = int(fg_size * 0.72)
-              icon_inner = img.resize((inner_size, inner_size), Image.Resampling.LANCZOS)
+              icon_inner = img.resize((inner_size, inner_size), resample_method)
               offset = (fg_size - inner_size) // 2
               fg_img.paste(icon_inner, (offset, offset))
               fg_img.save(os.path.join(dir_path, 'ic_launcher_foreground.png'), 'PNG')
 
-          print("Semua icon resmi Kognisia (ic_launcher.png) berhasil dibuat!")
-          PYEOF
+          print("Semua icon resmi Kognisia (PNG Mipmap & Round) berhasil dibuat!")
+          EOF
+          python3 generate_icons.py
 
           # Adaptive Icon XML untuk Android 8.0+ (API 26+)
           mkdir -p android_app/app/src/main/res/mipmap-anydpi-v26
@@ -497,6 +507,7 @@ jobs:
           files: Kognisia-v1.0.0.apk
           tag_name: v1.0.0
           name: "Kognisia v1.0.0 (Official Release)"
+          overwrite: true
           body: |
             ### Aplikasi Android Kognisia v1.0.0 (Bebas Iklan)
             Aplikasi resmi Kognisia untuk Guru dan Madrasah.

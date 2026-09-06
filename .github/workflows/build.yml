@@ -186,12 +186,18 @@ jobs:
           </adaptive-icon>
           EOF
 
-          # 6. AndroidManifest.xml (Menggunakan @mipmap/ic_launcher dan @mipmap/ic_launcher_round)
+          # 6. AndroidManifest.xml (Izin Notifikasi, Alarm Tepat Waktu, WakeLock, Boot)
           cat << 'EOF' > android_app/app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+              <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
+              <uses-permission android:name="android.permission.VIBRATE" />
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
               <application
                   android:allowBackup="true"
@@ -211,6 +217,14 @@ jobs:
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
+
+                  <!-- Alarm & Boot Receivers -->
+                  <receiver android:name=".AlarmReceiver" android:exported="false" />
+                  <receiver android:name=".BootReceiver" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.BOOT_COMPLETED" />
+                      </intent-filter>
+                  </receiver>
               </application>
           </manifest>
           EOF
@@ -303,7 +317,335 @@ jobs:
           </RelativeLayout>
           EOF
 
-          # 9. MainActivity.java
+          # 9. Java Files: AlarmReceiver, ScheduleHelper, BootReceiver, WebAppInterface, MainActivity
+          
+          # 9.1 WebAppInterface.java
+          cat << 'EOF' > android_app/app/src/main/java/id/my/kognisia/app/WebAppInterface.java
+          package id.my.kognisia.app;
+
+          import android.content.Context;
+          import android.content.Intent;
+          import android.webkit.JavascriptInterface;
+          import android.widget.Toast;
+
+          public class WebAppInterface {
+              private final Context context;
+
+              public WebAppInterface(Context context) {
+                  this.context = context;
+              }
+
+              @JavascriptInterface
+              public void syncSchedule(String jsonSchedules) {
+                  ScheduleHelper.saveAndSetAlarms(context, jsonSchedules);
+              }
+
+              @JavascriptInterface
+              public void testAlarm() {
+                  Intent intent = new Intent(context, AlarmReceiver.class);
+                  intent.putExtra("schedule_id", 99999);
+                  intent.putExtra("subject_name", "Uji Coba Alarm Mengajar");
+                  intent.putExtra("class_name", "Ruang Simulasi");
+                  intent.putExtra("start_time", "Sekarang");
+                  intent.putExtra("end_time", "Selesai");
+                  intent.putExtra("room", "Ruang Guru");
+                  context.sendBroadcast(intent);
+                  Toast.makeText(context, "Membunyikan alarm pengingat...", Toast.LENGTH_SHORT).show();
+              }
+          }
+          EOF
+
+          # 9.2 ScheduleHelper.java
+          cat << 'EOF' > android_app/app/src/main/java/id/my/kognisia/app/ScheduleHelper.java
+          package id.my.kognisia.app;
+
+          import android.app.AlarmManager;
+          import android.app.PendingIntent;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.os.Build;
+          import org.json.JSONArray;
+          import org.json.JSONObject;
+          import java.util.Calendar;
+
+          public class ScheduleHelper {
+              private static final String PREF_NAME = "kognisia_schedule_prefs";
+              private static final String KEY_SCHEDULES = "saved_schedules_json";
+
+              public static void saveAndSetAlarms(Context context, String jsonSchedules) {
+                  if (jsonSchedules == null) return;
+                  SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+                  prefs.edit().putString(KEY_SCHEDULES, jsonSchedules).apply();
+
+                  try {
+                      JSONArray arr = new JSONArray(jsonSchedules);
+                      for (int i = 0; i < arr.length(); i++) {
+                          JSONObject obj = arr.getJSONObject(i);
+                          scheduleAlarmForObject(context, obj);
+                      }
+                  } catch (Exception e) {
+                      e.printStackTrace();
+                  }
+              }
+
+              public static void restoreAlarms(Context context) {
+                  SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+                  String json = prefs.getString(KEY_SCHEDULES, null);
+                  if (json != null) {
+                      try {
+                          JSONArray arr = new JSONArray(json);
+                          for (int i = 0; i < arr.length(); i++) {
+                              scheduleAlarmForObject(context, arr.getJSONObject(i));
+                          }
+                      } catch (Exception e) {
+                          e.printStackTrace();
+                      }
+                  }
+              }
+
+              private static void scheduleAlarmForObject(Context context, JSONObject obj) {
+                  try {
+                      int id = obj.optInt("id", (int) (Math.random() * 100000));
+                      String dayStr = obj.optString("day", "");
+                      String startTimeStr = obj.optString("start_time", "07:00:00");
+                      String endTimeStr = obj.optString("end_time", "08:30:00");
+                      String subjectName = obj.optString("subject_name", "Jadwal Mengajar");
+                      String className = obj.optString("class_name", "");
+                      String room = obj.optString("room", "");
+
+                      int dayOfWeek = mapDayToCalendar(dayStr);
+                      if (dayOfWeek == -1) return;
+
+                      String[] timeParts = startTimeStr.split(":");
+                      int hour = Integer.parseInt(timeParts[0]);
+                      int minute = Integer.parseInt(timeParts[1]);
+
+                      Calendar cal = Calendar.getInstance();
+                      cal.set(Calendar.DAY_OF_WEEK, dayOfWeek);
+                      cal.set(Calendar.HOUR_OF_DAY, hour);
+                      cal.set(Calendar.MINUTE, minute);
+                      cal.set(Calendar.SECOND, 0);
+                      cal.set(Calendar.MILLISECOND, 0);
+
+                      // Berbunyi 10 menit sebelum jam pelajaran dimulai
+                      cal.add(Calendar.MINUTE, -10);
+
+                      if (cal.getTimeInMillis() <= System.currentTimeMillis()) {
+                          cal.add(Calendar.WEEK_OF_YEAR, 1);
+                      }
+
+                      Intent intent = new Intent(context, AlarmReceiver.class);
+                      intent.putExtra("schedule_id", id);
+                      intent.putExtra("subject_name", subjectName);
+                      intent.putExtra("class_name", className);
+                      intent.putExtra("start_time", startTimeStr);
+                      intent.putExtra("end_time", endTimeStr);
+                      intent.putExtra("room", room);
+                      intent.putExtra("day_of_week", dayOfWeek);
+
+                      PendingIntent pi = PendingIntent.getBroadcast(
+                              context,
+                              id,
+                              intent,
+                              PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
+                      );
+
+                      AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+                      if (am != null) {
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                              am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, cal.getTimeInMillis(), pi);
+                          } else {
+                              am.setExact(AlarmManager.RTC_WAKEUP, cal.getTimeInMillis(), pi);
+                          }
+                      }
+                  } catch (Exception e) {
+                      e.printStackTrace();
+                  }
+              }
+
+              public static void rescheduleForNextWeek(Context context, Intent oldIntent) {
+                  int scheduleId = oldIntent.getIntExtra("schedule_id", 0);
+                  int dayOfWeek = oldIntent.getIntExtra("day_of_week", -1);
+                  String startTimeStr = oldIntent.getStringExtra("start_time");
+                  if (dayOfWeek == -1 || startTimeStr == null) return;
+
+                  try {
+                      String[] timeParts = startTimeStr.split(":");
+                      int hour = Integer.parseInt(timeParts[0]);
+                      int minute = Integer.parseInt(timeParts[1]);
+
+                      Calendar cal = Calendar.getInstance();
+                      cal.set(Calendar.DAY_OF_WEEK, dayOfWeek);
+                      cal.set(Calendar.HOUR_OF_DAY, hour);
+                      cal.set(Calendar.MINUTE, minute);
+                      cal.set(Calendar.SECOND, 0);
+                      cal.set(Calendar.MILLISECOND, 0);
+                      cal.add(Calendar.MINUTE, -10);
+                      cal.add(Calendar.WEEK_OF_YEAR, 1);
+
+                      PendingIntent pi = PendingIntent.getBroadcast(
+                              context,
+                              scheduleId,
+                              oldIntent,
+                              PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
+                      );
+
+                      AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+                      if (am != null) {
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                              am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, cal.getTimeInMillis(), pi);
+                          } else {
+                              am.setExact(AlarmManager.RTC_WAKEUP, cal.getTimeInMillis(), pi);
+                          }
+                      }
+                  } catch (Exception e) {
+                      e.printStackTrace();
+                  }
+              }
+
+              private static int mapDayToCalendar(String day) {
+                  if (day == null) return -1;
+                  switch (day.trim().toLowerCase()) {
+                      case "senin": case "monday": return Calendar.MONDAY;
+                      case "selasa": case "tuesday": return Calendar.TUESDAY;
+                      case "rabu": case "wednesday": return Calendar.WEDNESDAY;
+                      case "kamis": case "thursday": return Calendar.THURSDAY;
+                      case "jumat": case "jum'at": case "friday": return Calendar.FRIDAY;
+                      case "sabtu": case "saturday": return Calendar.SATURDAY;
+                      case "minggu": case "sunday": return Calendar.SUNDAY;
+                      default: return -1;
+                  }
+              }
+          }
+          EOF
+
+          # 9.3 AlarmReceiver.java
+          cat << 'EOF' > android_app/app/src/main/java/id/my/kognisia/app/AlarmReceiver.java
+          package id.my.kognisia.app;
+
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.PendingIntent;
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.graphics.Color;
+          import android.media.AudioAttributes;
+          import android.media.Ringtone;
+          import android.media.RingtoneManager;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.PowerManager;
+          import androidx.core.app.NotificationCompat;
+
+          public class AlarmReceiver extends BroadcastReceiver {
+              public static final String CHANNEL_ID = "kognisia_schedule_alarm";
+              public static final String CHANNEL_NAME = "Alarm Jadwal Mengajar";
+
+              @Override
+              public void onReceive(Context context, Intent intent) {
+                  String subject = intent.getStringExtra("subject_name");
+                  String className = intent.getStringExtra("class_name");
+                  String startTime = intent.getStringExtra("start_time");
+                  String endTime = intent.getStringExtra("end_time");
+                  String room = intent.getStringExtra("room");
+                  int scheduleId = intent.getIntExtra("schedule_id", 0);
+
+                  if (subject == null || subject.isEmpty()) {
+                      subject = "Jadwal Mengajar";
+                  }
+
+                  // Bangunkan layar secara singkat
+                  PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+                  if (pm != null) {
+                      PowerManager.WakeLock wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP, "kognisia:alarm_wakelock");
+                      wl.acquire(10000);
+                  }
+
+                  NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+                  if (nm == null) return;
+
+                  Uri alarmSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
+                  if (alarmSound == null) {
+                      alarmSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+                  }
+
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      NotificationChannel channel = new NotificationChannel(CHANNEL_ID, CHANNEL_NAME, NotificationManager.IMPORTANCE_HIGH);
+                      channel.setDescription("Alarm pengingat jadwal mengajar guru Kognisia");
+                      channel.enableLights(true);
+                      channel.setLightColor(Color.BLUE);
+                      channel.enableVibration(true);
+                      channel.setVibrationPattern(new long[]{0, 500, 250, 500, 250, 500});
+                      AudioAttributes audioAttributes = new AudioAttributes.Builder()
+                              .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                              .setUsage(AudioAttributes.USAGE_ALARM)
+                              .build();
+                      channel.setSound(alarmSound, audioAttributes);
+                      nm.createNotificationChannel(channel);
+                  }
+
+                  Intent openAppIntent = new Intent(context, MainActivity.class);
+                  openAppIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                  PendingIntent pendingIntent = PendingIntent.getActivity(
+                          context,
+                          scheduleId,
+                          openAppIntent,
+                          PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
+                  );
+
+                  String title = "⏰ Waktunya Mengajar: " + subject;
+                  String content = "Kelas " + (className != null ? className : "") + " (" + (startTime != null ? startTime : "") + " - " + (endTime != null ? endTime : "") + ")" + (room != null && !room.isEmpty() ? " di " + room : "");
+
+                  NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CHANNEL_ID)
+                          .setSmallIcon(R.mipmap.ic_launcher)
+                          .setContentTitle(title)
+                          .setContentText(content)
+                          .setStyle(new NotificationCompat.BigTextStyle().bigText(content + "\nPersiapkan materi dan masuki ruang kelas pembelajaran."))
+                          .setPriority(NotificationCompat.PRIORITY_MAX)
+                          .setCategory(NotificationCompat.CATEGORY_ALARM)
+                          .setAutoCancel(true)
+                          .setSound(alarmSound)
+                          .setVibrate(new long[]{0, 500, 250, 500, 250, 500})
+                          .setContentIntent(pendingIntent)
+                          .setFullScreenIntent(pendingIntent, true);
+
+                  nm.notify(scheduleId > 0 ? scheduleId : (int) System.currentTimeMillis(), builder.build());
+
+                  // Bunyikan ringtone alarm secara langsung
+                  try {
+                      Ringtone r = RingtoneManager.getRingtone(context.getApplicationContext(), alarmSound);
+                      if (r != null) {
+                          r.play();
+                      }
+                  } catch (Exception ignored) {}
+
+                  // Jadwalkan otomatis untuk minggu depan
+                  ScheduleHelper.rescheduleForNextWeek(context, intent);
+              }
+          }
+          EOF
+
+          # 9.4 BootReceiver.java
+          cat << 'EOF' > android_app/app/src/main/java/id/my/kognisia/app/BootReceiver.java
+          package id.my.kognisia.app;
+
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+
+          public class BootReceiver extends BroadcastReceiver {
+              @Override
+              public void onReceive(Context context, Intent intent) {
+                  if (Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction())) {
+                      ScheduleHelper.restoreAlarms(context);
+                  }
+              }
+          }
+          EOF
+
+          # 9.5 MainActivity.java
           cat << 'EOF' > android_app/app/src/main/java/id/my/kognisia/app/MainActivity.java
           package id.my.kognisia.app;
 
@@ -360,6 +702,13 @@ jobs:
                   layoutError = findViewById(R.id.layoutError);
                   btnRetry = findViewById(R.id.btnRetry);
 
+                  // Minta Izin Notifikasi untuk Android 13+ (Tiramisu)
+                  if (Build.VERSION.SDK_INT >= 33) {
+                      if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                          requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 101);
+                      }
+                  }
+
                   WebSettings settings = webView.getSettings();
                   settings.setJavaScriptEnabled(true);
                   settings.setDomStorageEnabled(true);
@@ -368,6 +717,10 @@ jobs:
                   settings.setAllowContentAccess(true);
                   settings.setUseWideViewPort(true);
                   settings.setLoadWithOverviewMode(true);
+                  settings.setUserAgentString(settings.getUserAgentString() + " KognisiaApp/1.0");
+
+                  // Registrasi WebAppInterface agar Website dapat sinkronisasi jadwal alarm ke HP
+                  webView.addJavascriptInterface(new WebAppInterface(this), "KognisiaApp");
 
                   CookieManager cookieManager = CookieManager.getInstance();
                   cookieManager.setAcceptCookie(true);
@@ -475,7 +828,7 @@ jobs:
               }
 
               @Override
-              protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+              protected void处理ActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
                   super.onActivityResult(requestCode, resultCode, data);
                   if (requestCode == FILE_CHOOSER_REQUEST_CODE && uploadMessage != null) {
                       uploadMessage.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data));
@@ -514,4 +867,4 @@ jobs:
 
             - **URL Web:** https://kognisia.my.id/
             - **Status:** Bebas Iklan & Tanpa Watermark
-            - **Fitur:** Manajemen RPP, Jadwal Mengajar, Presensi, dan Pengelolaan Nilai Siswa.
+            - **Fitur:** Manajemen RPP, Jadwal Mengajar, Presensi, Pengelolaan Nilai Siswa, dan Notifikasi Alarm Jadwal Mengajar.

@@ -21,50 +21,53 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.2'
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Generate Clean Android Project (0 Ads)
+      - name: Generate Clean Android Project
         run: |
           mkdir -p android_app/app/src/main/java/id/my/kognisia/app
           mkdir -p android_app/app/src/main/res/layout
           mkdir -p android_app/app/src/main/res/values
           mkdir -p android_app/app/src/main/res/drawable
-          mkdir -p android_app/app/src/main/res/xml
-          mkdir -p android_app/app/src/main/res/mipmap-xxhdpi
-
-          # Download official logo from kognisia
-          curl -s -o android_app/app/src/main/res/drawable/logo.jpg https://kognisia.my.id/assets/images/logo.jpg || true
-          cp android_app/app/src/main/res/drawable/logo.jpg android_app/app/src/main/res/mipmap-xxhdpi/ic_launcher.png || true
 
           # 1. settings.gradle
           cat << 'EOF' > android_app/settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
           rootProject.name = "Kognisia"
           include ':app'
           EOF
 
           # 2. root build.gradle
           cat << 'EOF' > android_app/build.gradle
-          buildscript {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-              dependencies {
-                  classpath 'com.android.tools.build:gradle:8.2.2'
-              }
-          }
-          allprojects {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
+          plugins {
+              id 'com.android.application' version '8.2.2' apply false
           }
           EOF
 
           # 3. app/build.gradle
           cat << 'EOF' > android_app/app/build.gradle
-          apply plugin: 'com.android.application'
+          plugins {
+              id 'com.android.application'
+          }
 
           android {
               namespace 'id.my.kognisia.app'
@@ -99,19 +102,33 @@ jobs:
           }
           EOF
 
-          # 4. AndroidManifest.xml
+          # 4. Icon Vector (Menjamin tidak ada error AAPT2)
+          cat << 'EOF' > android_app/app/src/main/res/drawable/ic_launcher.xml
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path
+                  android:fillColor="#0284C7"
+                  android:pathData="M0,0h108v108h-108z"/>
+              <path
+                  android:fillColor="#FFFFFF"
+                  android:pathData="M54,20c-15.5,0 -28,12.5 -28,28 0,9.5 4.8,17.9 12,22.9v9.1c0,2.2 1.8,4 4,4h24c2.2,0 4,-1.8 4,-4v-9.1c7.2,-5 12,-13.4 12,-22.9 0,-15.5 -12.5,-28 -28,-28zM46,90h16v4h-16z"/>
+          </vector>
+          EOF
+
+          # 5. AndroidManifest.xml
           cat << 'EOF' > android_app/app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-              <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
 
               <application
                   android:allowBackup="true"
-                  android:icon="@drawable/logo"
-                  android:label="Kognisia"
+                  android:icon="@drawable/ic_launcher"
+                  android:label="@string/app_name"
                   android:supportsRtl="true"
                   android:theme="@style/Theme.Kognisia"
                   android:usesCleartextTraffic="true">
@@ -129,7 +146,7 @@ jobs:
           </manifest>
           EOF
 
-          # 5. res/values/
+          # 6. res/values/
           cat << 'EOF' > android_app/app/src/main/res/values/strings.xml
           <resources>
               <string name="app_name">Kognisia</string>
@@ -159,7 +176,7 @@ jobs:
           </resources>
           EOF
 
-          # 6. res/layout/activity_main.xml
+          # 7. res/layout/activity_main.xml
           cat << 'EOF' > android_app/app/src/main/res/layout/activity_main.xml
           <?xml version="1.0" encoding="utf-8"?>
           <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -217,7 +234,7 @@ jobs:
           </RelativeLayout>
           EOF
 
-          # 7. MainActivity.java
+          # 8. MainActivity.java
           cat << 'EOF' > android_app/app/src/main/java/id/my/kognisia/app/MainActivity.java
           package id.my.kognisia.app;
 
@@ -399,10 +416,11 @@ jobs:
           }
           EOF
 
-      - name: Build APK with Gradle
+      - name: Build APK with Gradle Wrapper
         run: |
           cd android_app
-          gradle assembleDebug
+          gradle wrapper --gradle-version 8.2
+          ./gradlew assembleDebug --no-daemon
 
       - name: Prepare APK File
         run: |
